@@ -6,8 +6,8 @@ from trl import SFTTrainer
 from datasets import load_dataset
 
 train_dataset = load_dataset(
-    "./data/llava-instruct-mix",
-    split="train[:10%]",
+    "./data/highlighted_images_v2_hf",
+    split="train[:1%]",
 )
 
 model_name = "models/Qwen3-VL-8B-Instruct" 
@@ -17,10 +17,10 @@ model = Qwen3VLForConditionalGeneration.from_pretrained(
     dtype="auto",
     device_map="auto",
     quantization_config=BitsAndBytesConfig(
-        load_in_4bit=True,                        # Load the model in 4-bit precision to save memory
-        bnb_4bit_compute_dtype=torch.float16,     # Data type used for internal computations in quantization
-        bnb_4bit_use_double_quant=True,           # Use double quantization to improve accuracy
-        bnb_4bit_quant_type="nf4"                 # Type of quantization. "nf4" is recommended for recent LLMs
+        load_in_4bit=True,                        
+        bnb_4bit_compute_dtype=torch.float16,     
+        bnb_4bit_use_double_quant=True,           
+        bnb_4bit_quant_type="nf4"
     )
 )
 
@@ -33,8 +33,8 @@ peft_config = LoraConfig(
 output_dir = "output/models/Qwen3-VL-8B-Instruct-sft"
 
 training_args = SFTConfig(
-    #num_train_epochs=1,
-    # max_steps=10,                                         
+    num_train_epochs=1,
+    # max_steps=2,                                         
     per_device_train_batch_size=2,                        
     gradient_accumulation_steps=8,                        # effective batch size = 4 * 8 = 32
     warmup_steps=5,                                       
@@ -45,7 +45,6 @@ training_args = SFTConfig(
     output_dir=output_dir,                                
     logging_steps=1,                                     
     report_to="trackio",                                  
-
     # push_to_hub=True,
 )
 

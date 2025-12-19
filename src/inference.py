@@ -3,17 +3,11 @@ from peft import PeftModel
 from datasets import load_dataset
 
 train_dataset = load_dataset(
-    "data/llava-instruct-mix",
-    split="train[:10%]",
+    "data/highlighted_images_v2_hf",
+    split="train[:1%]",
 )
 
-base_model = "models/Qwen3-VL-8B-Instruct"
-adapter_model = f"output/models/Qwen3-VL-8B-Instruct-sft"
-
-model = Qwen3VLForConditionalGeneration.from_pretrained(base_model, dtype="auto", device_map="auto")
-model = PeftModel.from_pretrained(model, adapter_model)
-
-processor = AutoProcessor.from_pretrained(base_model)
+print(train_dataset[0])
 
 problem = train_dataset[0]['prompt'][0]['content']
 image = train_dataset[0]['images'][0]
@@ -27,6 +21,14 @@ messages = [
         ],
     },
 ]
+
+base_model = "models/Qwen3-VL-8B-Instruct"
+adapter_model = f"output/models/Qwen3-VL-8B-Instruct-sft"
+
+model = Qwen3VLForConditionalGeneration.from_pretrained(base_model, dtype="auto", device_map="auto")
+model = PeftModel.from_pretrained(model, adapter_model)
+
+processor = AutoProcessor.from_pretrained(base_model)
 
 inputs = processor.apply_chat_template(
     messages,
