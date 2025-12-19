@@ -1,0 +1,14 @@
+[project]
+name = "qwen3-vl"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "bitsandbytes>=0.49.0",
+    "torch>=2.9.1",
+    "torchaudio>=2.9.1",
+    "torchvision>=0.24.1",
+    "trackio>=0.13.0",
+    "trl[peft]>=0.26.2",
+]
