@@ -11,11 +11,11 @@
 #
 # Example:
 # python src/jsonl_to_hf.py \
-#     --train_jsonl data/highlighted_images_v2/train_output.jsonl \
-#     --val_jsonl data/highlighted_images_v2/val_output.jsonl \
-#     --test_jsonl data/highlighted_images_v2/test_output.jsonl \
-#     --image_base_dir data/highlighted_images_v2 \
-#     --out_dir data/highlighted_images_v2_hf \
+#     --train_jsonl data/highlighted_images_v4.5/train_output.jsonl \
+#     --val_jsonl data/highlighted_images_v4.5/val_output.jsonl \
+#     --test_jsonl data/highlighted_images_v4.5/test_output.jsonl \
+#     --image_base_dir data/highlighted_images_v4.5 \
+#     --out_dir data/highlighted_images_v4.5_hf \
 #     --mode embed \
 #     --strip_image_token
 
@@ -72,6 +72,16 @@ def resolve_image_path(image_field: str, image_base_dir: Optional[str]) -> str:
     return os.path.join(image_base_dir, image_field)
 
 
+def abspath_from_root(path: Optional[str], root_dir: Optional[str]) -> Optional[str]:
+    if path is None:
+        return None
+    if os.path.isabs(path):
+        return path
+    if root_dir:
+        return os.path.abspath(os.path.join(root_dir, path))
+    return os.path.abspath(path)
+
+
 def normalize_messages(conversations: Any, strip_image_token: bool) -> Optional[list]:
     if not isinstance(conversations, list) or len(conversations) < 2:
         return None
@@ -115,6 +125,8 @@ def image_item_from_path(
     mode: str,
     make_abs_paths: bool,
     rel_hint: Optional[str] = None,
+    fs_out_dir: Optional[str] = None,
+    root_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Return a dict compatible with datasets.Image() encoding:
@@ -122,11 +134,23 @@ def image_item_from_path(
     IMPORTANT: This must return a dict, never a list.
     """
     if mode == "link":
-        p = os.path.abspath(src_path) if make_abs_paths else src_path
+        if make_abs_paths and not os.path.isabs(src_path):
+            base = root_dir or os.getcwd()
+            p = os.path.abspath(os.path.join(base, src_path))
+        else:
+            p = src_path
         return {"path": p}
 
     if mode == "copy":
-        images_dir = os.path.join(out_dir, "images")
+        copy_base = fs_out_dir
+        if copy_base is None:
+            if os.path.isabs(out_dir):
+                copy_base = out_dir
+            else:
+                base = root_dir or os.getcwd()
+                copy_base = os.path.abspath(os.path.join(base, out_dir))
+
+        images_dir = os.path.join(copy_base, "images")
         os.makedirs(images_dir, exist_ok=True)
 
         # Preserve relative structure from JSONL image field to avoid filename collisions
@@ -137,9 +161,14 @@ def image_item_from_path(
         if not os.path.exists(dst):
             shutil.copy2(src_path, dst)
 
-        stored = os.path.join("images", rel)
+        stored_rel = os.path.join("images", rel)
+        stored = os.path.join(out_dir, stored_rel)
         if make_abs_paths:
-            stored = os.path.abspath(os.path.join(out_dir, stored))
+            if os.path.isabs(stored):
+                stored = stored
+            else:
+                base = root_dir or os.getcwd()
+                stored = os.path.abspath(os.path.join(base, stored))
         return {"path": stored}
 
     if mode == "embed":
@@ -187,10 +216,15 @@ def iter_hf_rows(
     strip_image_token: bool,
     make_abs_paths: bool,
     max_skips_logged: int = 30,
+    root_dir: Optional[str] = None,
 ) -> Iterator[Dict[str, Any]]:
     total = 0
     kept = 0
     skipped = 0
+
+    root_dir = os.path.abspath(root_dir) if root_dir else None
+    fs_out_dir = abspath_from_root(out_dir, root_dir)
+    fs_image_base_dir = abspath_from_root(image_base_dir, root_dir) if image_base_dir else root_dir
 
     for ln, ex in read_jsonl_iter(jsonl_path):
         total += 1
@@ -202,11 +236,11 @@ def iter_hf_rows(
                 warn(f"{jsonl_path}:{ln} missing 'image', skipping")
             continue
 
-        src_path = resolve_image_path(str(image_field), image_base_dir)
-        if mode in ("link", "copy", "embed") and not os.path.isfile(src_path):
+        src_path_fs = resolve_image_path(str(image_field), fs_image_base_dir)
+        if mode in ("link", "copy", "embed") and not os.path.isfile(src_path_fs):
             skipped += 1
             if skipped <= max_skips_logged:
-                warn(f"{jsonl_path}:{ln} image not found: {src_path}, skipping")
+                warn(f"{jsonl_path}:{ln} image not found: {src_path_fs}, skipping")
             continue
 
         msgs = normalize_messages(ex.get("conversations"), strip_image_token=strip_image_token)
@@ -219,13 +253,31 @@ def iter_hf_rows(
         prompt = pack_turns(msgs[:-1])
         completion = pack_turns([msgs[-1]])
 
-        img_item = image_item_from_path(
-            src_path=src_path,
-            out_dir=out_dir,
-            mode=mode,
-            make_abs_paths=make_abs_paths,
-            rel_hint=str(image_field),  # key for copy mode collision-free
-        )
+        if mode == "link":
+            src_path_store = (
+                src_path_fs
+                if make_abs_paths
+                else resolve_image_path(str(image_field), image_base_dir)
+            )
+            item_src_path = src_path_store
+        else:
+            item_src_path = src_path_fs
+
+        try:
+            img_item = image_item_from_path(
+                src_path=item_src_path,
+                out_dir=out_dir,
+                mode=mode,
+                make_abs_paths=make_abs_paths,
+                rel_hint=str(image_field),  # key for copy mode collision-free
+                fs_out_dir=fs_out_dir,
+                root_dir=root_dir,
+            )
+        except FileNotFoundError:
+            skipped += 1
+            if skipped <= max_skips_logged:
+                warn(f"{jsonl_path}:{ln} image not found during load: {src_path_fs}, skipping")
+            continue
 
         # CRITICAL: wrap exactly once
         row = {
@@ -251,6 +303,7 @@ def build_dataset_from_jsonl(
     strip_image_token: bool,
     make_abs_paths: bool,
     writer_batch_size: int,
+    root_dir: Optional[str],
 ) -> Dataset:
     features = Features(
         {
@@ -271,6 +324,7 @@ def build_dataset_from_jsonl(
             "mode": mode,
             "strip_image_token": strip_image_token,
             "make_abs_paths": make_abs_paths,
+            "root_dir": root_dir,
         },
     )
 
@@ -294,6 +348,7 @@ def main() -> None:
     args = ap.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
+    root_dir = os.path.abspath(os.getcwd())
 
     splits = {
         "train": args.train_jsonl,
@@ -312,16 +367,30 @@ def main() -> None:
             strip_image_token=args.strip_image_token,
             make_abs_paths=args.make_abs_paths,
             writer_batch_size=args.writer_batch_size,
+            root_dir=root_dir,
         )
 
         out_parquet = os.path.join(args.out_dir, f"{split}.parquet")
-        ds.to_parquet(out_parquet)
+        try:
+            ds.to_parquet(out_parquet)
+        except FileNotFoundError as e:
+            warn(
+                f"{split} parquet size estimate failed due to missing image: {e}. "
+                f"Retrying with batch_size={args.writer_batch_size}."
+            )
+            ds.to_parquet(out_parquet, batch_size=args.writer_batch_size)
         info(f"Wrote {len(ds):,} rows to {out_parquet}")
 
         if len(ds) > 0:
-            ex0 = ds[0]
-            info(f"{split}[0] images={ex0['images']}")
-            info(f"{split}[0] prompt_turns={len(ex0['prompt'])} completion_turns={len(ex0['completion'])}")
+            try:
+                ex0 = ds[0]
+            except (FileNotFoundError, OSError) as e:
+                warn(f"{split}[0] sample decode failed: {e}")
+            else:
+                info(f"{split}[0] images={ex0['images']}")
+                info(
+                    f"{split}[0] prompt_turns={len(ex0['prompt'])} completion_turns={len(ex0['completion'])}"
+                )
 
         ds_dict[split] = ds
 
